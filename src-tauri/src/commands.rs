@@ -552,7 +552,8 @@ pub async fn open_region_selector(
         .map_err(|e| format!("Failed to show region selector window: {}", e))?;
 
     // Give the React component time to mount and set up event listeners
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Increased from 100ms to 800ms to ensure reliable event delivery
+    std::thread::sleep(std::time::Duration::from_millis(800));
 
     // Emit event with screenshot data to the window
     window

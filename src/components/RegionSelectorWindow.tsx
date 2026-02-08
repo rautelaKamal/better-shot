@@ -22,18 +22,22 @@ export function RegionSelectorWindow() {
     const [isReady, setIsReady] = useState(false);
 
     useEffect(() => {
+        console.log("[RegionSelectorWindow] Component mounted, configuring window...");
         const configureWindow = async () => {
             try {
+                console.log("[RegionSelectorWindow] Getting current window...");
                 const win = getCurrentWindow();
+                console.log("[RegionSelectorWindow] Window obtained, setting properties...");
                 await Promise.all([
                     win.setAlwaysOnTop(true),
                     win.setFullscreen(true),
                     win.setResizable(false),
                     win.setDecorations(false),
                 ]);
+                console.log("[RegionSelectorWindow] Window configured successfully, setting isReady=true");
                 setIsReady(true);
             } catch (error) {
-                console.error("Failed to configure region selector window:", error);
+                console.error("[RegionSelectorWindow] Failed to configure region selector window:", error);
             }
         };
 
@@ -41,17 +45,23 @@ export function RegionSelectorWindow() {
     }, []);
 
     useEffect(() => {
+        console.log("[RegionSelectorWindow] Setting up event listener for 'region-selector-show'...");
         let unlisten: (() => void) | undefined;
 
         const setupListener = async () => {
-            unlisten = await listen<RegionSelectorEventPayload>(
-                "region-selector-show",
-                (event) => {
-                    console.log("[RegionSelectorWindow] Received event:", event.payload);
-                    console.log("[RegionSelectorWindow] Monitor shots:", event.payload.monitorShots);
-                    setScreenshotData(event.payload);
-                }
-            );
+            try {
+                unlisten = await listen<RegionSelectorEventPayload>(
+                    "region-selector-show",
+                    (event) => {
+                        console.log("[RegionSelectorWindow] ✅ Event received!", event.payload);
+                        console.log("[RegionSelectorWindow] Monitor shots count:", event.payload.monitorShots?.length);
+                        setScreenshotData(event.payload);
+                    }
+                );
+                console.log("[RegionSelectorWindow] Event listener set up successfully");
+            } catch (error) {
+                console.error("[RegionSelectorWindow] Failed to set up event listener:", error);
+            }
         };
 
         setupListener();
@@ -115,6 +125,7 @@ export function RegionSelectorWindow() {
     }, [screenshotData]);
 
     if (!isReady || !screenshotData) {
+        console.log("[RegionSelectorWindow] Showing loading state. isReady:", isReady, "hasData:", !!screenshotData);
         return (
             <div className="flex size-full items-center justify-center bg-black">
                 <div className="size-12 animate-spin rounded-full border-4 border-white/20 border-t-white" />

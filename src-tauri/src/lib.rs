@@ -104,7 +104,7 @@ pub fn run() {
                     .center()
                     .resizable(true)
                     .decorations(true)
-                    .visible(false) // Start hidden
+                    .visible(true) // Show on startup for development
                     .build()?;
 
             // Handle close request - hide instead of quit
