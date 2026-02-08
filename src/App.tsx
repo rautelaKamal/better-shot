@@ -70,7 +70,7 @@ async function restoreWindowOnScreen(mouseX?: number, mouseY?: number) {
   if (mouseX !== undefined && mouseY !== undefined) {
     try {
       const monitors = await availableMonitors();
-      
+
       const targetMonitor = monitors.find((monitor) => {
         const pos = monitor.position;
         const size = monitor.size;
@@ -88,7 +88,7 @@ async function restoreWindowOnScreen(mouseX?: number, mouseY?: number) {
         const physicalWindowHeight = windowHeight * scaleFactor;
         const centerX = targetMonitor.position.x + (targetMonitor.size.width - physicalWindowWidth) / 2;
         const centerY = targetMonitor.position.y + (targetMonitor.size.height - physicalWindowHeight) / 2;
-        
+
         await appWindow.setPosition(new PhysicalPosition(centerX, centerY));
       } else {
         await appWindow.center();
@@ -107,6 +107,53 @@ async function restoreWindowOnScreen(mouseX?: number, mouseY?: number) {
 async function restoreWindow() {
   await restoreWindowOnScreen();
 }
+
+/**
+ * Helper to invoke Tauri commands with retry logic to handle initialization timing.
+ * Tauri's JavaScript APIs may not be fully loaded when the app first initializes,
+ * especially in dev mode with hot reload. This function retries the invoke call
+ * with small delays to allow Tauri to initialize.
+ */
+async function invokeWithRetries<T>(
+  command: string,
+  args?: Record<string, unknown>,
+  maxRetries = 3,
+  delayMs = 100
+): Promise<T | null> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      // Add small delay before attempts to give Tauri time to initialize
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      return await invoke<T>(command, args);
+    } catch (err) {
+      // Check if it's a Tauri initialization error
+      const errStr = String(err);
+      const isTauriInitError =
+        errStr.includes("__TAURI_INTERNALS__") || errStr.includes("undefined");
+
+      // If not an initialization error, fail immediately
+      if (!isTauriInitError && i === 0) {
+        console.error(`Command ${command} failed:`, err);
+        return null;
+      }
+
+      // If this is the last retry, log and return null
+      if (i === maxRetries - 1) {
+        console.error(
+          `Command ${command} failed after ${maxRetries} attempts:`,
+          err
+        );
+        return null;
+      }
+
+      // Tauri not ready yet, will retry
+    }
+  }
+  return null;
+}
+
 
 async function showQuickOverlay(
   screenshotPath: string,
@@ -227,7 +274,7 @@ function App() {
   const settingsRef = useRef({ autoApplyBackground, saveDir, copyToClipboard, tempDir });
   const registeredShortcutsRef = useRef<Set<string>>(new Set());
   const lastCaptureTimeRef = useRef(0);
-  
+
   // Keep ref in sync with state
   useEffect(() => {
     settingsRef.current = { autoApplyBackground, saveDir, copyToClipboard, tempDir };
@@ -281,16 +328,23 @@ function App() {
       // First get the desktop path as the default
       let desktopPath = "";
       try {
-        desktopPath = await invoke<string>("get_desktop_directory");
+        // Use retry logic to handle Tauri initialization timing
+        const result = await invokeWithRetries<string>("get_desktop_directory");
+        if (result) {
+          desktopPath = result;
+        }
       } catch (err) {
+        // Exception already logged by invokeWithRetries
         console.error("Failed to get Desktop directory:", err);
-        setError(`Failed to get Desktop directory: ${err instanceof Error ? err.message : String(err)}`);
+        // Don't set error UI - let user configure directory in settings
       }
 
       // Get the system temp directory (canonicalized to resolve symlinks)
       try {
-        const systemTempDir = await invoke<string>("get_temp_directory");
-        setTempDir(systemTempDir);
+        const systemTempDir = await invokeWithRetries<string>("get_temp_directory");
+        if (systemTempDir) {
+          setTempDir(systemTempDir);
+        }
       } catch (err) {
         console.error("Failed to get temp directory, using fallback:", err);
         // Keep the default /tmp fallback
@@ -366,6 +420,39 @@ function App() {
     // setMode("editing");
   }, []);
 
+  // Listen for capture-complete event from region selector window
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<{ path: string }>("capture-complete", async (event) => {
+        const screenshotPath = event.payload.path;
+        setIsCapturing(false);
+
+        try {
+          // Handle the captured region - set it as temp screenshot and open editor
+          setTempScreenshotPath(screenshotPath);
+          setMode("editing");
+          await playScreenshotSound();
+        } catch (err) {
+          console.error("Failed to process region capture:", err);
+          setError(
+            `Failed to process capture: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
 
   const handleCapture = useCallback(async (captureMode: CaptureMode = "region") => {
     const now = Date.now();
@@ -375,12 +462,12 @@ function App() {
     lastCaptureTimeRef.current = now;
 
     if (isCapturing) return;
-    
+
     setIsCapturing(true);
     setError(null);
 
     const appWindow = getCurrentWindow();
-    
+
     // Read current settings from ref to avoid stale closure issues
     const { autoApplyBackground: shouldAutoApply, saveDir: currentSaveDir, copyToClipboard: shouldCopyToClipboard, tempDir: currentTempDir } = settingsRef.current;
 
@@ -430,8 +517,32 @@ function App() {
         return;
       }
 
-      const commandMap: Record<Exclude<CaptureMode, "ocr">, string> = {
-        region: "native_capture_interactive",
+      // Handle region capture with custom selector window
+      if (captureMode === "region") {
+        console.log("[App.tsx] Region capture triggered, tempDir:", currentTempDir);
+        setIsCapturing(true);
+        try {
+          console.log("[App.tsx] Calling open_region_selector...");
+          await invoke("open_region_selector", {
+            saveDir: currentTempDir,
+          });
+          console.log("[App.tsx] open_region_selector succeeded");
+          // Don't proceed - the region selector window will handle completion
+          // and emit a "capture-complete" event when done
+          return;
+        } catch (err) {
+          console.error("[App.tsx] Region selector error:", err);
+          console.error("Region selector failed:", err);
+          setError(
+            `Failed to open region selector: ${err instanceof Error ? err.message : String(err)}`
+          );
+          setIsCapturing(false);
+          return;
+        }
+      }
+
+      // Handle other capture modes (fullscreen, window)
+      const commandMap: Record<"fullscreen" | "window", string> = {
         fullscreen: "native_capture_fullscreen",
         window: "native_capture_window",
       };
@@ -530,7 +641,7 @@ function App() {
           }
         }
         registeredShortcutsRef.current.clear();
-        
+
         const actionMap: Record<string, CaptureMode> = {
           "Capture Region": "region",
           "Capture Screen": "fullscreen",
@@ -540,7 +651,7 @@ function App() {
 
         for (const shortcut of shortcuts) {
           if (!shortcut.enabled) continue;
-          
+
           const action = actionMap[shortcut.action];
           if (action) {
             try {
@@ -745,8 +856,8 @@ function App() {
   if (mode === "preferences") {
     return (
       <Suspense fallback={<LoadingFallback />}>
-        <PreferencesPage 
-          onBack={handleBackFromPreferences} 
+        <PreferencesPage
+          onBack={handleBackFromPreferences}
           onSettingsChange={handleSettingsChange}
         />
       </Suspense>
@@ -757,173 +868,173 @@ function App() {
     <>
       <main className="min-h-dvh flex flex-col items-center justify-center p-8 bg-background text-foreground">
         <div className="w-full max-w-2xl space-y-6">
-        <div className="relative text-center space-y-2">
-          <div className="absolute top-0 right-0">
-            <SettingsIcon onClick={() => setMode("preferences")} />
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-5xl font-bold text-foreground text-balance">Better Shot</h1>
-              <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
-                v{__APP_VERSION__}
-              </span>
+          <div className="relative text-center space-y-2">
+            <div className="absolute top-0 right-0">
+              <SettingsIcon onClick={() => setMode("preferences")} />
             </div>
-            <p className="text-muted-foreground text-sm text-pretty">Capture, edit, and enhance your screenshots with professional quality.</p>
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex items-center gap-2">
+                <h1 className="text-5xl font-bold text-foreground text-balance">Better Shot</h1>
+                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
+                  v{__APP_VERSION__}
+                </span>
+              </div>
+              <p className="text-muted-foreground text-sm text-pretty">Capture, edit, and enhance your screenshots with professional quality.</p>
+            </div>
           </div>
+
+          <Card className="bg-card border-border">
+            <CardContent className="p-6 space-y-6">
+              <div className="grid grid-cols-2 gap-3">
+                <Button
+                  onClick={() => handleCapture("region")}
+                  disabled={isCapturing}
+                  variant="cta"
+                  size="lg"
+                  className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Crop className="size-4" aria-hidden="true" />
+                  Region
+                </Button>
+                <Button
+                  onClick={() => handleCapture("ocr")}
+                  disabled={isCapturing}
+                  variant="cta"
+                  size="lg"
+                  className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ScanText className="size-4" aria-hidden="true" />
+                  OCR Region
+                </Button>
+                <Button
+                  onClick={() => handleCapture("fullscreen")}
+                  disabled={isCapturing}
+                  variant="cta"
+                  size="lg"
+                  className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Monitor className="size-4" aria-hidden="true" />
+                  Screen
+                </Button>
+                <Button
+                  onClick={() => handleCapture("window")}
+                  disabled={isCapturing}
+                  variant="cta"
+                  size="lg"
+                  className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <AppWindowMac className="size-4" aria-hidden="true" />
+                  Window
+                </Button>
+              </div>
+
+              {/* Quick Toggle for Auto-apply */}
+              <div className="flex items-center justify-between py-2 px-1">
+                <div className="flex-1">
+                  <label htmlFor="auto-apply-toggle" className="text-sm font-medium text-foreground cursor-pointer block">
+                    Auto-apply background
+                  </label>
+                  <p className="text-xs text-muted-foreground">Apply default background and save instantly</p>
+                </div>
+                <Switch
+                  id="auto-apply-toggle"
+                  checked={autoApplyBackground}
+                  onCheckedChange={handleAutoApplyToggle}
+                />
+              </div>
+
+              {isCapturing && (
+                <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm">
+                  <svg className="animate-spin size-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Waiting for selection...
+                </div>
+              )}
+
+              {error && (
+                <div className="p-4 bg-red-950/30 border border-red-800/50 rounded-lg">
+                  <div className="font-medium text-red-300 mb-1">Error</div>
+                  <div className="text-red-400 text-sm text-pretty">{error}</div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card border-border">
+            <CardContent className="p-5 space-y-4">
+              <h3 className="font-medium text-foreground text-sm">Keyboard Shortcuts</h3>
+
+              {/* Capture Shortcuts */}
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Capture</p>
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Region</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
+                      {getShortcutDisplay("region")}
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">OCR Region</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
+                      {getShortcutDisplay("ocr")}
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Screen</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
+                      {getShortcutDisplay("fullscreen")}
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Window</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
+                      {getShortcutDisplay("window")}
+                    </kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Cancel</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">Esc</kbd>
+                  </div>
+                </div>
+              </div>
+
+              {/* Editor Shortcuts */}
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Editor</p>
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Save</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⌘S</kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Copy</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⇧⌘C</kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Undo</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⌘Z</kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Redo</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⇧⌘Z</kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Delete annotation</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⌫</kbd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Close editor</span>
+                    <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">Esc</kbd>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
-
-        <Card className="bg-card border-border">
-          <CardContent className="p-6 space-y-6">
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                onClick={() => handleCapture("region")}
-                disabled={isCapturing}
-                variant="cta"
-                size="lg"
-                className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Crop className="size-4" aria-hidden="true" />
-                Region
-              </Button>
-              <Button
-                onClick={() => handleCapture("ocr")}
-                disabled={isCapturing}
-                variant="cta"
-                size="lg"
-                className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ScanText className="size-4" aria-hidden="true" />
-                OCR Region
-              </Button>
-              <Button
-                onClick={() => handleCapture("fullscreen")}
-                disabled={isCapturing}
-                variant="cta"
-                size="lg"
-                className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Monitor className="size-4" aria-hidden="true" />
-                Screen
-              </Button>
-              <Button
-                onClick={() => handleCapture("window")}
-                disabled={isCapturing}
-                variant="cta"
-                size="lg"
-                className="py-3 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <AppWindowMac className="size-4" aria-hidden="true" />
-                Window
-              </Button>
-            </div>
-
-            {/* Quick Toggle for Auto-apply */}
-            <div className="flex items-center justify-between py-2 px-1">
-              <div className="flex-1">
-                <label htmlFor="auto-apply-toggle" className="text-sm font-medium text-foreground cursor-pointer block">
-                  Auto-apply background
-                </label>
-                <p className="text-xs text-muted-foreground">Apply default background and save instantly</p>
-              </div>
-              <Switch
-                id="auto-apply-toggle"
-                checked={autoApplyBackground}
-                onCheckedChange={handleAutoApplyToggle}
-              />
-            </div>
-
-            {isCapturing && (
-              <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm">
-                <svg className="animate-spin size-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Waiting for selection...
-              </div>
-            )}
-
-            {error && (
-              <div className="p-4 bg-red-950/30 border border-red-800/50 rounded-lg">
-                <div className="font-medium text-red-300 mb-1">Error</div>
-                <div className="text-red-400 text-sm text-pretty">{error}</div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="bg-card border-border">
-          <CardContent className="p-5 space-y-4">
-            <h3 className="font-medium text-foreground text-sm">Keyboard Shortcuts</h3>
-            
-            {/* Capture Shortcuts */}
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground uppercase tracking-wide">Capture</p>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Region</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
-                    {getShortcutDisplay("region")}
-                  </kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">OCR Region</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
-                    {getShortcutDisplay("ocr")}
-                  </kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Screen</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
-                    {getShortcutDisplay("fullscreen")}
-                  </kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Window</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">
-                    {getShortcutDisplay("window")}
-                  </kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Cancel</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">Esc</kbd>
-                </div>
-              </div>
-            </div>
-
-            {/* Editor Shortcuts */}
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground uppercase tracking-wide">Editor</p>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Save</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⌘S</kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Copy</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⇧⌘C</kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Undo</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⌘Z</kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Redo</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⇧⌘Z</kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Delete annotation</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">⌫</kbd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Close editor</span>
-                  <kbd className="px-2 py-1 bg-secondary border border-border rounded text-foreground font-mono text-xs tabular-nums">Esc</kbd>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </main>
+      </main>
     </>
   );
 }

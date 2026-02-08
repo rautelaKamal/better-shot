@@ -12,10 +12,12 @@ mod screenshot;
 mod utils;
 
 use commands::{
-    capture_all_monitors, capture_once, capture_region, copy_image_file_to_clipboard,
-    get_desktop_directory, get_mouse_position, get_temp_directory, move_window_to_active_space,
-    native_capture_fullscreen, native_capture_interactive, native_capture_window,
-    native_capture_ocr_region, play_screenshot_sound, render_image_with_effects_rust, save_edited_image,
+    capture_all_monitors, capture_region, capture_once, cleanup_temp_file,
+    copy_image_file_to_clipboard, emit_capture_complete, get_desktop_directory,
+    get_mouse_position, get_temp_directory, move_window_to_active_space,
+    native_capture_fullscreen, native_capture_interactive, native_capture_ocr_region,
+    native_capture_window, open_region_selector, play_screenshot_sound,
+    render_image_with_effects_rust, restore_main_window, save_edited_image,
 };
 
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -256,7 +258,11 @@ pub fn run() {
             play_screenshot_sound,
             get_mouse_position,
             move_window_to_active_space,
-            copy_image_file_to_clipboard
+            copy_image_file_to_clipboard,
+            open_region_selector,
+            emit_capture_complete,
+            cleanup_temp_file,
+            restore_main_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

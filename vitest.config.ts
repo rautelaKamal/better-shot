@@ -9,6 +9,12 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    pool: "threads",
+    server: {
+      deps: {
+        inline: ["@exodus/bytes", "html-encoding-sniffer"],
+      },
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],

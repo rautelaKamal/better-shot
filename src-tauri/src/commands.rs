@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(target_os = "macos")]
 use objc2::msg_send;
@@ -511,4 +511,95 @@ pub async fn native_capture_ocr_region(save_dir: String) -> Result<String, Strin
     let _ = std::fs::remove_file(&screenshot_path);
 
     Ok(recognized_text)
+}
+
+/// Open region selector window with captured screenshots
+/// Captures all monitors and opens a fullscreen region selector window
+#[tauri::command]
+pub async fn open_region_selector(
+    app_handle: AppHandle,
+    save_dir: String,
+) -> Result<(), String> {
+    // Capture all monitors
+    let monitor_shots = capture_monitors(&save_dir)?;
+
+    // Create the region selector window if it doesn't exist
+    let window_label = "region-selector";
+    
+    if let Some(existing_window) = app_handle.get_webview_window(window_label) {
+        // Close existing window if any
+        existing_window.close().ok();
+    }
+
+    // Create new fullscreen window for region selection
+    let window = tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        window_label,
+        tauri::WebviewUrl::App("/?region-selector=1".into()),
+    )
+    .title("Region Selector")
+    .fullscreen(true)
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .visible(false) // Start hidden, will show after setup
+    .build()
+    .map_err(|e| format!("Failed to create region selector window: {}", e))?;
+
+    // Show the window first
+    window
+        .show()
+        .map_err(|e| format!("Failed to show region selector window: {}", e))?;
+
+    // Give the React component time to mount and set up event listeners
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Emit event with screenshot data to the window
+    window
+        .emit(
+            "region-selector-show",
+            serde_json::json!({
+                "screenshotPath": monitor_shots.first().map(|m| m.path.clone()).unwrap_or_default(),
+                "monitorShots": monitor_shots,
+            }),
+        )
+        .map_err(|e| format!("Failed to emit region selector event: {}", e))?;
+
+    Ok(())
+}
+
+/// Emit capture complete event to main window
+#[tauri::command]
+pub async fn emit_capture_complete(app_handle: AppHandle, path: String) -> Result<(), String> {
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        main_window
+            .emit("capture-complete", serde_json::json!({ "path": path }))
+            .map_err(|e| format!("Failed to emit capture complete: {}", e))?;
+        
+        // Restore and focus main window
+        main_window.show().ok();
+        main_window.set_focus().ok();
+    }
+    Ok(())
+}
+
+/// Clean up a temporary file
+#[tauri::command]
+pub async fn cleanup_temp_file(path: String) -> Result<(), String> {
+    std::fs::remove_file(&path)
+        .map_err(|e| format!("Failed to remove temp file: {}", e))
+}
+
+/// Restore the main window
+#[tauri::command]
+pub async fn restore_main_window(app_handle: AppHandle) -> Result<(), String> {
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        main_window
+            .show()
+            .map_err(|e| format!("Failed to show main window: {}", e))?;
+        main_window
+            .set_focus()
+            .map_err(|e| format!("Failed to focus main window: {}", e))?;
+    }
+    Ok(())
 }
