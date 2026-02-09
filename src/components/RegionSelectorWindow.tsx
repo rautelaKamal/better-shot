@@ -78,31 +78,52 @@ export function RegionSelectorWindow() {
             if (!screenshotData) return;
 
             try {
-                // Derive save directory from the screenshot path to ensure we write to a valid temp location
-                // The screenshotPath is already in a valid temp dir
-                const monitorShot = screenshotData.monitorShots.find(s => s.path === screenshotData.screenshotPath) || screenshotData.monitorShots[0];
-                // We'll pass the directory of the monitor shot. 
-                // However, the backend's capture_region expects a directory to save TO.
-                // If we pass empty string, it saves to CWD which is bad.
-                // We can construct the path using a known safe directory if possible, but we don't have direct fs access here easily.
-                // Best effort: extract directory from the path.
-                // Since we can't use node's path module, we do string manipulation.
-                // Assume standard path separators.
+                const centerX = region.x + region.width / 2;
+                const centerY = region.y + region.height / 2;
+
+                // Find which monitor the selection center is on
+                const targetShot =
+                    screenshotData.monitorShots.find((s) => {
+                        return (
+                            centerX >= s.x &&
+                            centerX <= s.x + s.width &&
+                            centerY >= s.y &&
+                            centerY <= s.y + s.height
+                        );
+                    }) ?? screenshotData.monitorShots[0];
+
+                // Calculate local coordinates relative to that monitor
+                const localX = Math.max(0, region.x - targetShot.x);
+                const localY = Math.max(0, region.y - targetShot.y);
+                const localWidth = Math.min(region.width, targetShot.width - localX);
+                const localHeight = Math.min(region.height, targetShot.height - localY);
+                const scale = targetShot.scale_factor;
+
+                // Derive save directory from the target shot path
                 let saveDir = "";
-                const lastSepIndex = Math.max(monitorShot.path.lastIndexOf("/"), monitorShot.path.lastIndexOf("\\"));
+                const lastSepIndex = Math.max(targetShot.path.lastIndexOf("/"), targetShot.path.lastIndexOf("\\"));
                 if (lastSepIndex !== -1) {
-                    saveDir = monitorShot.path.substring(0, lastSepIndex);
+                    saveDir = targetShot.path.substring(0, lastSepIndex);
                 }
 
-                // Call backend to crop the screenshot
+                // Call backend to crop from the SPECIFIC monitor's screenshot
                 const croppedPath = await invoke<string>("capture_region", {
-                    screenshotPath: screenshotData.screenshotPath,
-                    x: Math.round(region.x),
-                    y: Math.round(region.y),
-                    width: Math.round(region.width),
-                    height: Math.round(region.height),
+                    screenshotPath: targetShot.path,
+                    x: Math.round(localX * scale),
+                    y: Math.round(localY * scale),
+                    width: Math.round(localWidth * scale),
+                    height: Math.round(localHeight * scale),
                     saveDir: saveDir,
                 });
+
+                // Clean up ALL temp monitor screenshots now that we have the crop
+                await Promise.all(
+                    screenshotData.monitorShots.map((shot) =>
+                        invoke("cleanup_temp_file", { path: shot.path }).catch((e) =>
+                            console.error("Failed to cleanup file:", shot.path, e)
+                        )
+                    )
+                );
 
                 // Emit event back to main window with the cropped image path
                 await invoke("emit_capture_complete", {
