@@ -425,23 +425,27 @@ function App() {
     let unlisten: (() => void) | undefined;
 
     const setupListener = async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{ path: string }>("capture-complete", async (event) => {
-        const screenshotPath = event.payload.path;
-        setIsCapturing(false);
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ path: string }>("capture-complete", async (event) => {
+          const screenshotPath = event.payload.path;
+          setIsCapturing(false);
 
-        try {
-          // Handle the captured region - set it as temp screenshot and open editor
-          setTempScreenshotPath(screenshotPath);
-          setMode("editing");
-          await invoke("play_screenshot_sound");
-        } catch (err) {
-          console.error("Failed to process region capture:", err);
-          setError(
-            `Failed to process capture: ${err instanceof Error ? err.message : String(err)}`
-          );
-        }
-      });
+          try {
+            // Handle the captured region - set it as temp screenshot and open editor
+            setTempScreenshotPath(screenshotPath);
+            setMode("editing");
+            await invoke("play_screenshot_sound");
+          } catch (err) {
+            console.error("Failed to process region capture:", err);
+            setError(
+              `Failed to process capture: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        });
+      } catch (err) {
+        console.error("Failed to setup capture listener:", err);
+      }
     };
 
     setupListener();
@@ -519,20 +523,15 @@ function App() {
 
       // Handle region capture with custom selector window
       if (captureMode === "region") {
-        console.log("[App.tsx] Region capture triggered, tempDir:", currentTempDir);
-        setIsCapturing(true);
         try {
-          console.log("[App.tsx] Calling open_region_selector...");
           await invoke("open_region_selector", {
             saveDir: currentTempDir,
           });
-          console.log("[App.tsx] open_region_selector succeeded");
           // Don't proceed - the region selector window will handle completion
           // and emit a "capture-complete" event when done
           return;
         } catch (err) {
-          console.error("[App.tsx] Region selector error:", err);
-          console.error("Region selector failed:", err);
+          console.error("Failed to open region selector:", err);
           setError(
             `Failed to open region selector: ${err instanceof Error ? err.message : String(err)}`
           );

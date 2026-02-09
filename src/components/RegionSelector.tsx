@@ -350,6 +350,10 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
       const { x, y, width, height } = getSelectionBounds();
 
       if (width > 10 && height > 10) {
+        // Normalize refs so start is always top-left and current is bottom-right.
+        startRef.current = { x, y };
+        currentRef.current = { x: x + width, y: y + height };
+
         // Valid selection - enter adjustment mode
         hasSelectionRef.current = true;
         setInstructionText("Drag handles to adjust · ENTER to confirm · ESC to cancel");
