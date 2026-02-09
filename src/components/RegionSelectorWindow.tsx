@@ -81,6 +81,10 @@ export function RegionSelectorWindow() {
                 const centerX = region.x + region.width / 2;
                 const centerY = region.y + region.height / 2;
 
+                if (screenshotData.monitorShots.length === 0) {
+                    throw new Error("No monitor screenshots available");
+                }
+
                 // Find which monitor the selection center is on
                 const targetShot =
                     screenshotData.monitorShots.find((s) => {
@@ -92,11 +96,18 @@ export function RegionSelectorWindow() {
                         );
                     }) ?? screenshotData.monitorShots[0];
 
-                // Calculate local coordinates relative to that monitor
-                const localX = Math.max(0, region.x - targetShot.x);
-                const localY = Math.max(0, region.y - targetShot.y);
-                const localWidth = Math.min(region.width, targetShot.width - localX);
-                const localHeight = Math.min(region.height, targetShot.height - localY);
+                // Calculate local coordinates relative to that monitor with clamping
+                // This ensures we never send negative or out-of-bounds coordinates to the backend
+                const unclampedX = region.x - targetShot.x;
+                const unclampedY = region.y - targetShot.y;
+
+                const localX = Math.min(Math.max(0, unclampedX), targetShot.width);
+                const localY = Math.min(Math.max(0, unclampedY), targetShot.height);
+
+                // Calculate width/height ensuring we don't go past the edge of the screenshot
+                const localWidth = Math.max(0, Math.min(region.width, targetShot.width - localX));
+                const localHeight = Math.max(0, Math.min(region.height, targetShot.height - localY));
+
                 const scale = targetShot.scale_factor;
 
                 // Derive save directory from the target shot path
