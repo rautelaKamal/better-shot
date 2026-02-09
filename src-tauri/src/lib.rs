@@ -104,7 +104,7 @@ pub fn run() {
                     .center()
                     .resizable(true)
                     .decorations(true)
-                    .visible(true) // Show on startup for development
+                    .visible(cfg!(debug_assertions)) // Show on startup for development only
                     .build()?;
 
             // Handle close request - hide instead of quit

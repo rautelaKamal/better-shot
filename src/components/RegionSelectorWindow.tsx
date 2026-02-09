@@ -78,6 +78,22 @@ export function RegionSelectorWindow() {
             if (!screenshotData) return;
 
             try {
+                // Derive save directory from the screenshot path to ensure we write to a valid temp location
+                // The screenshotPath is already in a valid temp dir
+                const monitorShot = screenshotData.monitorShots.find(s => s.path === screenshotData.screenshotPath) || screenshotData.monitorShots[0];
+                // We'll pass the directory of the monitor shot. 
+                // However, the backend's capture_region expects a directory to save TO.
+                // If we pass empty string, it saves to CWD which is bad.
+                // We can construct the path using a known safe directory if possible, but we don't have direct fs access here easily.
+                // Best effort: extract directory from the path.
+                // Since we can't use node's path module, we do string manipulation.
+                // Assume standard path separators.
+                let saveDir = "";
+                const lastSepIndex = Math.max(monitorShot.path.lastIndexOf("/"), monitorShot.path.lastIndexOf("\\"));
+                if (lastSepIndex !== -1) {
+                    saveDir = monitorShot.path.substring(0, lastSepIndex);
+                }
+
                 // Call backend to crop the screenshot
                 const croppedPath = await invoke<string>("capture_region", {
                     screenshotPath: screenshotData.screenshotPath,
@@ -85,7 +101,7 @@ export function RegionSelectorWindow() {
                     y: Math.round(region.y),
                     width: Math.round(region.width),
                     height: Math.round(region.height),
-                    saveDir: "", // Will use temp dir or get from settings
+                    saveDir: saveDir,
                 });
 
                 // Emit event back to main window with the cropped image path
@@ -106,11 +122,13 @@ export function RegionSelectorWindow() {
 
     const handleCancel = useCallback(async () => {
         try {
-            // Clean up temp screenshot file
-            if (screenshotData?.screenshotPath) {
-                await invoke("cleanup_temp_file", {
-                    path: screenshotData.screenshotPath,
-                });
+            // Clean up all temp screenshot files
+            if (screenshotData?.monitorShots) {
+                await Promise.all(
+                    screenshotData.monitorShots.map(shot =>
+                        invoke("cleanup_temp_file", { path: shot.path }).catch(e => console.error("Failed to cleanup file:", shot.path, e))
+                    )
+                );
             }
 
             // Restore main window

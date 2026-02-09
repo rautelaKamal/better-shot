@@ -93,7 +93,9 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
     updateCanvasSize();
 
     const render = () => {
-      if (!needsUpdateRef.current && isSelectingRef.current) {
+      if (!needsUpdateRef.current && !isSelectingRef.current) {
+        // If nothing needs updating and we aren't currently selecting, skip render
+        // But we need to keep the loop running to catch future updates
         rafRef.current = requestAnimationFrame(render);
         return;
       }
@@ -260,6 +262,22 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
         dragHandleRef.current = handle;
         isSelectingRef.current = true;
       } else if (hasSelectionRef.current) {
+        // We are in adjustment mode.
+        // If clicking inside the current selection, do nothing (or we could support moving the entire selection later)
+        // If clicking outside, reset the selection to start a new one.
+
+        const { x, y, width, height } = getSelectionBounds();
+        const isInside =
+          e.clientX >= x &&
+          e.clientX <= x + width &&
+          e.clientY >= y &&
+          e.clientY <= y + height;
+
+        if (isInside) {
+          // Click inside - do nothing (waiting for drag or double click)
+          return;
+        }
+
         // Clicking outside selection while in adjustment mode - start new selection
         hasSelectionRef.current = false;
         dragHandleRef.current = null;

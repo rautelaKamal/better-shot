@@ -134,7 +134,7 @@ async function invokeWithRetries<T>(
         errStr.includes("__TAURI_INTERNALS__") || errStr.includes("undefined");
 
       // If not an initialization error, fail immediately
-      if (!isTauriInitError && i === 0) {
+      if (!isTauriInitError) {
         console.error(`Command ${command} failed:`, err);
         return null;
       }
@@ -434,7 +434,7 @@ function App() {
           // Handle the captured region - set it as temp screenshot and open editor
           setTempScreenshotPath(screenshotPath);
           setMode("editing");
-          await playScreenshotSound();
+          await invoke("play_screenshot_sound");
         } catch (err) {
           console.error("Failed to process region capture:", err);
           setError(

@@ -535,7 +535,7 @@ pub async fn open_region_selector(
     let window = tauri::WebviewWindowBuilder::new(
         &app_handle,
         window_label,
-        tauri::WebviewUrl::App("/?region-selector=1".into()),
+        tauri::WebviewUrl::App("index.html?region-selector=1".into()),
     )
     .title("Region Selector")
     .fullscreen(true)
@@ -553,7 +553,8 @@ pub async fn open_region_selector(
 
     // Give the React component time to mount and set up event listeners
     // Increased from 100ms to 800ms to ensure reliable event delivery
-    std::thread::sleep(std::time::Duration::from_millis(800));
+    // Use async sleep to avoid blocking the runtime thread
+    tauri::async_runtime::sleep(std::time::Duration::from_millis(800)).await;
 
     // Emit event with screenshot data to the window
     window
@@ -584,10 +585,21 @@ pub async fn emit_capture_complete(app_handle: AppHandle, path: String) -> Resul
     Ok(())
 }
 
-/// Clean up a temporary file
+/// Clean up a temporary file safely
 #[tauri::command]
 pub async fn cleanup_temp_file(path: String) -> Result<(), String> {
-    std::fs::remove_file(&path)
+    // Security check: ensure the file is within the system temp directory
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp = temp_dir.canonicalize().unwrap_or(temp_dir);
+    
+    let path_buf = PathBuf::from(&path);
+    let canonical_path = path_buf.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
+    
+    if !canonical_path.starts_with(&canonical_temp) {
+        return Err("Security violation: Attempted to delete file outside of temp directory".to_string());
+    }
+
+    std::fs::remove_file(&canonical_path)
         .map_err(|e| format!("Failed to remove temp file: {}", e))
 }
 
