@@ -698,27 +698,39 @@ function App() {
 
     const setupListeners = async () => {
       // Use refs to always call the latest handler without re-registering
-      unlisten1 = await listen("capture-triggered", () => {
+      const u1 = await listen("capture-triggered", () => {
         if (mounted) handleCaptureRef.current("region");
       });
-      unlisten2 = await listen("capture-fullscreen", () => {
+      if (!mounted) { u1(); return; } else { unlisten1 = u1; }
+
+      const u2 = await listen("capture-fullscreen", () => {
         if (mounted) handleCaptureRef.current("fullscreen");
       });
-      unlisten3 = await listen("capture-window", () => {
+      if (!mounted) { u2(); return; } else { unlisten2 = u2; }
+
+      const u3 = await listen("capture-window", () => {
         if (mounted) handleCaptureRef.current("window");
       });
-      unlisten4 = await listen("capture-ocr", () => {
+      if (!mounted) { u3(); return; } else { unlisten3 = u3; }
+
+      const u4 = await listen("capture-ocr", () => {
         if (mounted) handleCaptureRef.current("ocr");
       });
-      unlisten5 = await listen("open-preferences", () => {
+      if (!mounted) { u4(); return; } else { unlisten4 = u4; }
+
+      const u5 = await listen("open-preferences", () => {
         if (mounted) setMode("preferences");
       });
-      unlisten6 = await listen("auto-apply-changed", (event: { payload: boolean }) => {
+      if (!mounted) { u5(); return; } else { unlisten5 = u5; }
+
+      const u6 = await listen("auto-apply-changed", (event: { payload: boolean }) => {
         if (mounted) {
           setAutoApplyBackground(event.payload);
         }
       });
-      unlisten7 = await listen<{ path: string }>("open-editor-for-path", async (event) => {
+      if (!mounted) { u6(); return; } else { unlisten6 = u6; }
+
+      const u7 = await listen<{ path: string }>("open-editor-for-path", async (event) => {
         if (!mounted) return;
         const { path } = event.payload;
         setTempScreenshotPath(path);
@@ -729,7 +741,9 @@ function App() {
         }
         await restoreWindow();
       });
-      unlisten8 = await listen("show-last-capture-overlay", async () => {
+      if (!mounted) { u7(); return; } else { unlisten7 = u7; }
+
+      const u8 = await listen("show-last-capture-overlay", async () => {
         if (!mounted) return;
         try {
           const store = await Store.load("settings.json");
@@ -741,6 +755,7 @@ function App() {
           console.error("Failed to show last capture overlay:", error);
         }
       });
+      if (!mounted) { u8(); return; } else { unlisten8 = u8; }
     };
 
     setupListeners();

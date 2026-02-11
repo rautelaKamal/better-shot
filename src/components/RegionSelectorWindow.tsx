@@ -42,15 +42,24 @@ export function RegionSelectorWindow() {
 
     useEffect(() => {
         let unlisten: (() => void) | undefined;
+        let mounted = true;
 
         const setupListener = async () => {
             try {
-                unlisten = await listen<RegionSelectorEventPayload>(
+                const unlistenFn = await listen<RegionSelectorEventPayload>(
                     "region-selector-show",
                     (event) => {
-                        setScreenshotData(event.payload);
+                        if (mounted) {
+                            setScreenshotData(event.payload);
+                        }
                     }
                 );
+
+                if (mounted) {
+                    unlisten = unlistenFn;
+                } else {
+                    unlistenFn();
+                }
             } catch (error) {
                 console.error("[RegionSelectorWindow] Failed to set up event listener:", error);
             }
@@ -59,6 +68,7 @@ export function RegionSelectorWindow() {
         setupListener();
 
         return () => {
+            mounted = false;
             if (unlisten) {
                 unlisten();
             }

@@ -342,6 +342,43 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
       needsUpdateRef.current = true;
     };
 
+    const updateCursor = (e: MouseEvent) => {
+      // If we are dragging, keep the cursor consistent with the drag handle
+      if (isSelectingRef.current && dragHandleRef.current) {
+        return; // Keep existing cursor
+      }
+
+      const handle = getHandleAtPosition(e.clientX, e.clientY);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      if (handle) {
+        if (handle.type === 'corner') {
+          if (handle.index === 0 || handle.index === 3) {
+            canvas.style.cursor = 'nwse-resize';
+          } else {
+            canvas.style.cursor = 'nesw-resize';
+          }
+        } else { // edge
+          if (handle.index === 0 || handle.index === 2) {
+            canvas.style.cursor = 'ns-resize';
+          } else {
+            canvas.style.cursor = 'ew-resize';
+          }
+        }
+      } else if (hasSelectionRef.current) {
+        // Check if inside selection
+        const { x, y, width, height } = getSelectionBounds();
+        if (e.clientX >= x && e.clientX <= x + width && e.clientY >= y && e.clientY <= y + height) {
+          canvas.style.cursor = 'move';
+        } else {
+          canvas.style.cursor = 'crosshair';
+        }
+      } else {
+        canvas.style.cursor = 'crosshair';
+      }
+    };
+
     const handleMouseUp = () => {
       if (!isSelectingRef.current) return;
       isSelectingRef.current = false;
@@ -415,6 +452,7 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
     container.addEventListener("mousedown", handleMouseDown);
     container.addEventListener("dblclick", handleDoubleClick);
     window.addEventListener("mousemove", handleMouseMove);
+    container.addEventListener("mousemove", updateCursor);
     window.addEventListener("mouseup", handleMouseUp);
     window.addEventListener("keydown", handleKeyDown);
 
@@ -422,6 +460,7 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
       container.removeEventListener("mousedown", handleMouseDown);
       container.removeEventListener("dblclick", handleDoubleClick);
       window.removeEventListener("mousemove", handleMouseMove);
+      container.removeEventListener("mousemove", updateCursor);
       window.removeEventListener("mouseup", handleMouseUp);
       window.removeEventListener("keydown", handleKeyDown);
     };
