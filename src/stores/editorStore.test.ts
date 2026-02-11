@@ -39,7 +39,7 @@ describe("editorStore - padding feature", () => {
     });
   });
 
-  describe("setPaddingTransient", () => {
+  describe("setAllPaddingTransient", () => {
     it("should update padding without pushing to history", () => {
       const initialHistoryLength = useEditorStore.getState().past.length;
 
@@ -94,6 +94,9 @@ describe("editorStore - padding feature", () => {
 
       const state = useEditorStore.getState();
       expect(state.settings.paddingTop).toBe(150);
+      expect(state.settings.paddingBottom).toBe(150);
+      expect(state.settings.paddingLeft).toBe(150);
+      expect(state.settings.paddingRight).toBe(150);
       expect(state.past.length).toBe(initialHistoryLength + 1);
     });
 

@@ -758,7 +758,9 @@ function App() {
       if (!mounted) { u8(); return; } else { unlisten8 = u8; }
     };
 
-    setupListeners();
+    setupListeners().catch((err) =>
+      console.error("Failed to set up tray listeners:", err)
+    );
 
     return () => {
       mounted = false;

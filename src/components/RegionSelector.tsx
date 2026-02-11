@@ -349,33 +349,33 @@ export function RegionSelector({ onSelect, onCancel, monitorShots }: RegionSelec
       }
 
       const handle = getHandleAtPosition(e.clientX, e.clientY);
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+      const container = containerRef.current;
+      if (!container) return;
 
       if (handle) {
         if (handle.type === 'corner') {
           if (handle.index === 0 || handle.index === 3) {
-            canvas.style.cursor = 'nwse-resize';
+            container.style.cursor = 'nwse-resize';
           } else {
-            canvas.style.cursor = 'nesw-resize';
+            container.style.cursor = 'nesw-resize';
           }
         } else { // edge
           if (handle.index === 0 || handle.index === 2) {
-            canvas.style.cursor = 'ns-resize';
+            container.style.cursor = 'ns-resize';
           } else {
-            canvas.style.cursor = 'ew-resize';
+            container.style.cursor = 'ew-resize';
           }
         }
       } else if (hasSelectionRef.current) {
         // Check if inside selection
         const { x, y, width, height } = getSelectionBounds();
         if (e.clientX >= x && e.clientX <= x + width && e.clientY >= y && e.clientY <= y + height) {
-          canvas.style.cursor = 'move';
+          container.style.cursor = 'default';
         } else {
-          canvas.style.cursor = 'crosshair';
+          container.style.cursor = 'crosshair';
         }
       } else {
-        canvas.style.cursor = 'crosshair';
+        container.style.cursor = 'crosshair';
       }
     };
 
